@@ -33,8 +33,8 @@
 // ---------------------------------------------------------------------------
 
 // Credenciales de tu WiFi. Editalas antes de subir el sketch.
-const char* WIFI_SSID = "Personal-670";
-const char* WIFI_PASS = "amedante2023";
+const char* WIFI_SSID = "";
+const char* WIFI_PASS = "";
 
 // Puerto TCP donde escucha el controlador. La app se conecta aca.
 const uint16_t TCP_PORT = 5005;
