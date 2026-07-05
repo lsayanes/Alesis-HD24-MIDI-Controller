@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Build outputs
+build/
+
+# Qt Creator
+CMakeLists.txt.user
+*.user
+
+# Editor
+.vscode/
+.idea/
+
+# Compilados
+*.o
+*.obj
+*.so
+*.dylib
+*.exe
+*.app/
+
+*.log
+
+

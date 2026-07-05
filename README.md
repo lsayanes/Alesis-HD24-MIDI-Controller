@@ -7,9 +7,15 @@ envía por una salida **MIDI DIN de 5 pines** hacia el conector **MIDI IN** de l
 HD24.
 
 ```
-   App movil  --- WiFi/TCP --->  ESP32  --- MIDI DIN --->  HD24 (MIDI IN)
-   (botones)                   (traduce a MMC)
+   App movil  --- WiFi/TCP ----\
+   (botones)                    >-- ESP32 --- MIDI DIN --> HD24 (MIDI IN)
+   App movil  --- Bluetooth ---/   (traduce a MMC)
 ```
+
+El controlador soporta **dos transportes, uno u otro** (no ambos a la vez): el
+**WiFi/TCP** original, o **Bluetooth Classic (SPP)** para conectarse sin red. El
+modo se elige al arrancar con un pin (ver *Selección de transporte* abajo). El
+**mismo protocolo de texto** funciona igual por los dos.
 
 > Según el *ADAT HD24 Reference Manual*, Cap. 8, la HD24 recibe comandos MMC
 > (REW, PLAY, STOP, REC, LOCATE, etc.) por su MIDI IN. El controlador solo
@@ -81,6 +87,35 @@ ARM 1 ON
 LOCATE 00:00:10:00
 ```
 
+## Selección de transporte (WiFi o Bluetooth)
+
+El transporte se decide **una sola vez, al arrancar**, leyendo el pin
+`MODE_SELECT_PIN` (por defecto **GPIO4**, con pull-up interno):
+
+| Pin de selección (GPIO4)     | Modo al arrancar |
+|------------------------------|------------------|
+| **Libre / sin conectar**     | WiFi / TCP (comportamiento original) |
+| **Puenteado a GND**          | Bluetooth Classic (SPP) |
+
+Para cambiar de modo: puenteás/despuenteás el pin y **reiniciás** el ESP32. Nunca
+se encienden los dos radios a la vez, así que no hay contención de RF.
+
+> **Requiere un ESP32 clásico.** El Bluetooth Classic (SPP) **no** existe en los
+> ESP32-S2/S3/C3 (esos solo tienen BLE). El sketch aborta la compilación con un
+> `#error` si el core no tiene BT Classic habilitado.
+
+### Conectarse por Bluetooth desde la tablet Android
+
+1. Poné el ESP32 en modo Bluetooth (GPIO4 a GND) y reiniciá.
+2. En Android, **emparejá** con el dispositivo **`HD24`** (nombre configurable en
+   `BT_NAME`). PIN por defecto: `1234` si lo pide.
+3. En la app, abrí un **socket SPP / Bluetooth serie** hacia `HD24` y mandá las
+   mismas líneas de texto (`"PLAY\n"`, `"ARM 3\n"`, ...). Para probar sin app,
+   sirve cualquier terminal Bluetooth SPP (p. ej. "Serial Bluetooth Terminal").
+
+El saludo, el protocolo de comandos y las respuestas `OK/ERR` son **idénticos** a
+los del modo TCP.
+
 ## Materiales
 
 - Placa **ESP32** (cualquier dev board con WiFi; p. ej. ESP32-WROOM DevKit).
@@ -140,8 +175,12 @@ Otros ajustes MIDI (heredados de la versión Uno):
 ## Cómo cargar el sketch
 
 1. En el Arduino IDE, instalá el soporte para **ESP32** (Boards Manager →
-   "esp32" de Espressif). Las librerías `WiFi` y `ESPmDNS` vienen incluidas.
-2. Seleccioná tu placa ESP32 y el puerto.
+   "esp32" de Espressif). Las librerías `WiFi`, `ESPmDNS` y `BluetoothSerial`
+   vienen incluidas.
+2. Seleccioná tu placa ESP32 y el puerto. **Importante:** al compilar WiFi + BT
+   Classic juntos el binario es grande; si el IDE se queja de que no entra, elegí
+   un *Partition Scheme* con más espacio de app (p. ej. **"Huge APP (3MB No OTA)"**
+   en Tools → Partition Scheme).
 3. Editá `WIFI_SSID` / `WIFI_PASS`.
 4. Subí el sketch (a diferencia del Uno, **no** hace falta desconectar el MIDI).
 5. Abrí el **Monitor Serie a 115200** para ver la IP asignada y los comandos que
@@ -149,12 +188,17 @@ Otros ajustes MIDI (heredados de la versión Uno):
 
 ## Cómo funciona el ESP32 (resumen del firmware)
 
-- `setup()`: arranca el USB (115200, solo debug) y `Serial2` (31250, MIDI),
-  se conecta al WiFi y levanta el servidor TCP + mDNS.
-- `loop()`: reconecta el WiFi si se cae, acepta un cliente, y lee sus comandos
-  línea por línea. Cada línea pasa por `handleCommand()`, que llama a las mismas
-  funciones `sendMmc()` / `sendLocate()` / `sendTrackRecordReady()` de la versión
-  Uno. **La capa MIDI/MMC no cambió**; solo cambió de dónde vienen las órdenes.
+- `setup()`: arranca el USB (115200, solo debug) y `Serial2` (31250, MIDI), lee
+  `MODE_SELECT_PIN` para elegir el transporte y, según eso, levanta el servidor
+  TCP + mDNS **o** el Bluetooth Classic (`SerialBT.begin("HD24")`).
+- `loop()`: mantiene el bobinado continuo (REW/FF) y delega en `loopWifi()` o
+  `loopBt()` según el modo. Ambos leen líneas y las pasan por `processLine()`,
+  que despacha a `handleCommand()`. Como `WiFiClient` y `BluetoothSerial` heredan
+  de `Stream`, **el mismo código sirve para los dos**.
+- `handleCommand()` es **agnóstico al transporte**: recibe un `String` y devuelve
+  un `String`, llamando a las mismas `sendMmc()` / `sendLocate()` /
+  `sendTrackRecordReady()` de la versión Uno. **La capa MIDI/MMC no cambió**; solo
+  cambió de dónde vienen las órdenes.
 
 ## Ideas para el cliente gráfico (Android/iOS)
 

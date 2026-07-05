@@ -27,13 +27,20 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <ESPmDNS.h>
+#include <BluetoothSerial.h>   // Bluetooth Classic (SPP) — solo ESP32 clasico
+
+// El Bluetooth Classic solo existe en el ESP32 original. Los ESP32-S2/S3/C3
+// no tienen BT Classic (solo BLE), asi que este sketch requiere un ESP32 clasico.
+#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
+#error "Este sketch necesita un ESP32 clasico con Bluetooth Classic habilitado."
+#endif
 
 // ---------------------------------------------------------------------------
 // Configuracion de red
 // ---------------------------------------------------------------------------
 
 // Credenciales de tu WiFi. Editalas antes de subir el sketch.
-const char* WIFI_SSID = "";
+const char* WIFI_SSID = "Personal-670";
 const char* WIFI_PASS = "";
 
 // Puerto TCP donde escucha el controlador. La app se conecta aca.
@@ -41,6 +48,27 @@ const uint16_t TCP_PORT = 5005;
 
 // Nombre mDNS: la app puede conectarse a "hd24.local" en vez de una IP fija.
 const char* MDNS_NAME = "hd24";
+
+// ---------------------------------------------------------------------------
+// Configuracion Bluetooth (Classic / SPP) y seleccion de modo
+// ---------------------------------------------------------------------------
+
+// Nombre con el que el ESP32 aparece al emparejar por Bluetooth desde la tablet.
+const char* BT_NAME = "HD24";
+
+// Pin que elige el transporte AL ARRANCAR (se lee una sola vez en setup()):
+//   - libre / sin conectar  -> WiFi/TCP   (comportamiento original, pull-up interno)
+//   - puenteado a GND        -> Bluetooth (SPP)
+// GPIO4 es un pin libre y seguro (no es strapping). Cambia el numero si lo usas
+// para otra cosa. Nunca se encienden los dos radios a la vez: se elige uno u otro.
+const int MODE_SELECT_PIN = 4;
+
+// Transporte activo, decidido en setup() segun MODE_SELECT_PIN.
+enum Transport : uint8_t { MODE_WIFI, MODE_BT };
+Transport transport = MODE_WIFI;
+
+// Objeto Bluetooth Classic (solo se usa si transport == MODE_BT).
+BluetoothSerial SerialBT;
 
 // ---------------------------------------------------------------------------
 // Configuracion MIDI
@@ -363,34 +391,31 @@ void connectWifi()
 }
 
 // ---------------------------------------------------------------------------
-// Setup / loop
+// Procesamiento de comandos comun a ambos transportes
 // ---------------------------------------------------------------------------
-void setup() 
+//
+// Tanto WiFiClient como BluetoothSerial heredan de Stream, asi que el mismo
+// codigo lee una linea, la despacha a handleCommand() y responde por donde llego.
+void processLine(Stream& io)
 {
-    Serial.begin(115200);                                  // USB, solo depuracion
-    Midi.begin(MIDI_BAUD, SERIAL_8N1, MIDI_RX_PIN, MIDI_TX_PIN);
-
-    connectWifi();
-    server.begin();
-    Serial.print("Servidor TCP escuchando en el puerto ");
-    Serial.println(TCP_PORT);
+    String line = io.readStringUntil('\n');
+    line.replace("\r", "");
+    String resp = handleCommand(line);
+    io.println(resp);
+    Serial.print("< ");  Serial.print(line);
+    Serial.print("  > "); Serial.println(resp);
 }
 
-void loop() 
+// ---------------------------------------------------------------------------
+// Bucle por transporte
+// ---------------------------------------------------------------------------
+void loopWifi()
 {
     // Reconexion automatica si se cae el WiFi.
-    if (WiFi.status() != WL_CONNECTED) 
+    if (WiFi.status() != WL_CONNECTED)
     {
       Serial.println("WiFi caido, reconectando...");
       connectWifi();
-    }
-
-    // Bobinado continuo: mientras REW/FF esten activos, reenviar el comando
-    // cada WIND_REPEAT_MS para que la HD24 siga bobinando.
-    if (windCmd != 0 && (millis() - lastWindMs) >= WIND_REPEAT_MS)
-    {
-      sendMmc(windCmd);
-      lastWindMs = millis();
     }
 
     // Aceptar un cliente nuevo si no hay ninguno conectado.
@@ -400,8 +425,8 @@ void loop()
         windCmd = 0;
 
         WiFiClient incoming = server.available();
-      
-        if (incoming) 
+
+        if (incoming)
         {
           client = incoming;
           Serial.print("Cliente conectado: ");
@@ -411,13 +436,76 @@ void loop()
     }
 
     // Leer comandos del cliente, linea por linea.
-    if (client && client.connected() && client.available()) 
+    if (client && client.connected() && client.available())
+      processLine(client);
+}
+
+void loopBt()
+{
+    // Detectar (des)conexion del cliente Bluetooth para saludar / frenar bobinado.
+    static bool wasConnected = false;
+    bool now = SerialBT.hasClient();
+
+    if (now && !wasConnected)
     {
-        String line = client.readStringUntil('\n');
-        line.replace("\r", "");
-        String resp = handleCommand(line);
-        client.println(resp);
-        Serial.print("< ");  Serial.print(line);
-        Serial.print("  > "); Serial.println(resp);
+      Serial.println("Cliente Bluetooth conectado");
+      SerialBT.println("HD24 MIDI controller ready");
     }
+
+    // Seguridad: sin cliente, cortar cualquier bobinado en curso.
+    if (!now)
+      windCmd = 0;
+
+    wasConnected = now;
+
+    // Leer comandos del cliente, linea por linea.
+    if (now && SerialBT.available())
+      processLine(SerialBT);
+}
+
+// ---------------------------------------------------------------------------
+// Setup / loop
+// ---------------------------------------------------------------------------
+void setup()
+{
+    Serial.begin(115200);                                  // USB, solo depuracion
+    Midi.begin(MIDI_BAUD, SERIAL_8N1, MIDI_RX_PIN, MIDI_TX_PIN);
+
+    // Elegir transporte una sola vez, segun el pin de seleccion.
+    // Libre (pull-up, HIGH) = WiFi ; puenteado a GND (LOW) = Bluetooth.
+    pinMode(MODE_SELECT_PIN, INPUT_PULLUP);
+    delay(10);   // dejar estabilizar el pull-up antes de leer
+    transport = (digitalRead(MODE_SELECT_PIN) == LOW) ? MODE_BT : MODE_WIFI;
+
+    if (transport == MODE_WIFI)
+    {
+      Serial.println("Modo: WiFi / TCP");
+      connectWifi();
+      server.begin();
+      Serial.print("Servidor TCP escuchando en el puerto ");
+      Serial.println(TCP_PORT);
+    }
+    else
+    {
+      Serial.println("Modo: Bluetooth (SPP)");
+      SerialBT.begin(BT_NAME);
+      Serial.print("Bluetooth activo, emparejar con: ");
+      Serial.println(BT_NAME);
+    }
+}
+
+void loop()
+{
+    // Bobinado continuo (comun a ambos transportes): mientras REW/FF esten
+    // activos, reenviar el comando cada WIND_REPEAT_MS para que la HD24 siga.
+    if (windCmd != 0 && (millis() - lastWindMs) >= WIND_REPEAT_MS)
+    {
+      sendMmc(windCmd);
+      lastWindMs = millis();
+    }
+
+    if (transport == MODE_WIFI)
+      loopWifi();
+    else
+      loopBt();
 }
