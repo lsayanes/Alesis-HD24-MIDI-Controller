@@ -228,4 +228,4 @@ Este cliente es la interfaz gráfica prevista en el README del ESP32. El firmwar
 
 ## Licencia y autor
 
-Desarrollado por **iDev - JalaGamaes**. Versión de aplicación: **1.0** (Android empaquetado: 1.2 según `CMakeLists.txt`).
+Desarrollado por **iDev - JalaGames**. Versión de aplicación: **1.0** (Android empaquetado: 1.2 según `CMakeLists.txt`).
