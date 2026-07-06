@@ -29,6 +29,8 @@
 #include <ESPmDNS.h>
 #include <BluetoothSerial.h>   // Bluetooth Classic (SPP) — solo ESP32 clasico
 
+#include "secret.h"
+
 // El Bluetooth Classic solo existe en el ESP32 original. Los ESP32-S2/S3/C3
 // no tienen BT Classic (solo BLE), asi que este sketch requiere un ESP32 clasico.
 #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
@@ -39,9 +41,7 @@
 // Configuracion de red
 // ---------------------------------------------------------------------------
 
-// Credenciales de tu WiFi. Editalas antes de subir el sketch.
-const char* WIFI_SSID = "Personal-670";
-const char* WIFI_PASS = "";
+
 
 // Puerto TCP donde escucha el controlador. La app se conecta aca.
 const uint16_t TCP_PORT = 5005;
@@ -477,7 +477,7 @@ void setup()
     delay(10);   // dejar estabilizar el pull-up antes de leer
     transport = (digitalRead(MODE_SELECT_PIN) == LOW) ? MODE_BT : MODE_WIFI;
     
-    transport = MODE_BT;
+//    transport = MODE_BT;
 
     if (transport == MODE_WIFI)
     {
