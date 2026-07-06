@@ -29,6 +29,8 @@
 #include <QBluetoothAddress>
 #include <QBluetoothSocket>
 
+#include <functional>
+
 class QBluetoothDeviceDiscoveryAgent;
 class QBluetoothDeviceInfo;
 class QBluetoothServiceDiscoveryAgent;
@@ -100,6 +102,7 @@ private slots:
     void onConnectTimeout();
 
 private:
+    bool ensurePermission(std::function<void()> retry);
     void cancelConnectAttempt();
     void startConnectTimeout();
     void connectRfcomm(const QBluetoothAddress &address, quint16 channel);

@@ -6,6 +6,11 @@
 #include <QBluetoothServiceInfo>
 #include <QBluetoothUuid>
 #include <QTimer>
+#include <QCoreApplication>
+
+#if QT_CONFIG(permissions)
+#include <QPermissions>
+#endif
 
 // ---------------------------------------------------------------------------
 // Construccion / destruccion
@@ -53,8 +58,45 @@ Bluetooth::~Bluetooth()
 // ---------------------------------------------------------------------------
 // Descubrimiento de dispositivos
 // ---------------------------------------------------------------------------
+// Pide el permiso Bluetooth en runtime (Android 12+ / iOS / macOS moderno).
+// Devuelve true si ya esta concedido; si esta pendiente, ejecuta 'retry'
+// cuando el usuario lo conceda.
+bool Bluetooth::ensurePermission(std::function<void()> retry)
+{
+#if QT_CONFIG(permissions)
+    QBluetoothPermission perm;
+    perm.setCommunicationModes(QBluetoothPermission::Access);
+
+    switch (qApp->checkPermission(perm))
+    {
+    case Qt::PermissionStatus::Granted:
+        return true;
+    case Qt::PermissionStatus::Undetermined:
+        qApp->requestPermission(perm, this,
+            [this, retry](const QPermission &p)
+            {
+                if (p.status() == Qt::PermissionStatus::Granted)
+                    retry();
+                else
+                    emit errorOccurred(tr("Permiso Bluetooth denegado por el usuario"));
+            });
+        return false;
+    case Qt::PermissionStatus::Denied:
+        emit errorOccurred(tr(
+            "Permiso Bluetooth denegado. Habilitalo en Ajustes > Apps > RC-HD24 > Permisos."));
+        return false;
+    }
+#else
+    Q_UNUSED(retry);
+#endif
+    return true;
+}
+
 void Bluetooth::startDiscovery()
 {
+    if (!ensurePermission([this]{ startDiscovery(); }))
+        return;
+
     if (m_agent->isActive())
         m_agent->stop();
 
@@ -141,6 +183,9 @@ void Bluetooth::connectRfcomm(const QBluetoothAddress &address, quint16 channel)
 
 void Bluetooth::connectToDevice(const QBluetoothAddress &address)
 {
+    if (!ensurePermission([this, address]{ connectToDevice(address); }))
+        return;
+
     m_address = address.toString();
     m_buffer.clear();
 

@@ -17,6 +17,11 @@
 #include <QDialogButtonBox>
 #include <QIntValidator>
 #include <QMessageBox>
+#include <QShowEvent>
+
+#ifdef Q_OS_ANDROID
+#include <QJniObject>
+#endif
 
 // ---------------------------------------------------------------------------
 // Construccion
@@ -75,6 +80,31 @@ bool RCHD24::create(const std::string &title)
     return true;
 }
 
+void RCHD24::showEvent(QShowEvent *event)
+{
+    QMainWindow::showEvent(event);
+
+#ifdef Q_OS_ANDROID
+    // Evita que Android apague/bloquee la pantalla mientras se usa el control remoto.
+    // Tambien esta en AndroidManifest (keepScreenOn); esto refuerza por si Qt lo pisa.
+    QJniObject activity = QJniObject::callStaticObjectMethod(
+        "org/qtproject/qt/android/QtNative",
+        "activity",
+        "()Landroid/app/Activity;");
+    if (!activity.isValid())
+        return;
+
+    QJniObject window = activity.callObjectMethod(
+        "getWindow",
+        "()Landroid/view/Window;");
+    if (!window.isValid())
+        return;
+
+    constexpr int FLAG_KEEP_SCREEN_ON = 128;   // WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+    window.callMethod<void>("addFlags", "(I)V", FLAG_KEEP_SCREEN_ON);
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // Header: boton "Conexion" (siempre visible) + estado
 // ---------------------------------------------------------------------------
@@ -87,7 +117,7 @@ QWidget *RCHD24::buildHeader()
     // Boton con menu desplegable: funciona igual en desktop y en Android
     // (a diferencia de la barra de menu, que en Android no se muestra y en
     // macOS se va a la barra global del sistema).
-    auto *connBtn = new QPushButton(tr("☰  Conexion"), header);
+    auto *connBtn = new QPushButton(tr("Conexion"), header);
     connBtn->setMinimumHeight(36);
     connBtn->setMenu(buildConnectionMenu());
 
@@ -250,15 +280,16 @@ QWidget *RCHD24::buildTransportPanel()
     auto *row   = new QHBoxLayout(group);
     row->setSpacing(6);
 
-    // { texto del boton, comando del firmware, color opcional }
+    // Etiquetas ASCII: los simbolos Unicode (⏪ ▶ ⏸ …) no se renderizan en
+    // Android porque la fuente del sistema no los incluye.
     struct Btn { QString text; QString cmd; QString color; };
     const QList<Btn> defs = {
-        { QStringLiteral("⏪"), QStringLiteral("REW"),   QString() },            // ⏪
-        { QStringLiteral("▶"), QStringLiteral("PLAY"),  QStringLiteral("#2e7d32") }, // ▶
-        { QStringLiteral("⏸"), QStringLiteral("PAUSE"), QString() },            // ⏸
-        { QStringLiteral("⏹"), QStringLiteral("STOP"),  QString() },            // ⏹
-        { QStringLiteral("⏩"), QStringLiteral("FF"),    QString() },            // ⏩
-        { QStringLiteral("●"), QStringLiteral("REC"),   QStringLiteral("#c0392b") }, // ●
+        { tr("REW"),   QStringLiteral("REW"),   QString() },
+        { tr("PLAY"),  QStringLiteral("PLAY"),  QStringLiteral("#2e7d32") },
+        { tr("PAUSE"), QStringLiteral("PAUSE"), QString() },
+        { tr("STOP"),  QStringLiteral("STOP"),  QString() },
+        { tr("FF"),    QStringLiteral("FF"),    QString() },
+        { tr("REC"),   QStringLiteral("REC"),   QStringLiteral("#c0392b") },
     };
 
     for (const Btn &d : defs)
@@ -267,7 +298,7 @@ QWidget *RCHD24::buildTransportPanel()
         btn->setMinimumHeight(64);
         btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         QFont f = btn->font();
-        f.setPointSize(f.pointSize() + 8);
+        f.setBold(true);
         btn->setFont(f);
         btn->setToolTip(d.cmd);
         if (!d.color.isEmpty())

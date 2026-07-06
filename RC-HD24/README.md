@@ -77,6 +77,65 @@ export Qt6_DIR=/ruta/a/qt6/lib/cmake/Qt6
 export Qt5_DIR=/ruta/a/qt5/lib/cmake/Qt5
 ```
 
+## Compilación para Android (APK)
+
+La app corre en Android como aplicación Qt nativa. **No se abre el proyecto
+CMake directamente en Android Studio**: el APK se genera con el kit *Qt para
+Android* desde la terminal, y Android Studio aporta el SDK/NDK, el emulador y
+`adb` (opcionalmente también podés abrir el proyecto Gradle generado).
+
+### Requisitos (una sola vez)
+
+1. **Android Studio** con SDK (platform 35), build-tools y **NDK 27**
+   (SDK Manager → SDK Tools → NDK).
+2. **Kit Qt para Android** de la misma versión que el Qt de escritorio
+   (aquí 6.9.3), instalable con [aqtinstall](https://github.com/miurahr/aqtinstall):
+
+```bash
+pip install aqtinstall
+aqt install-qt all_os android 6.9.3 android_arm64_v8a -m qtconnectivity --outputdir ~/Qt
+```
+
+   El módulo `qtconnectivity` es imprescindible (provee Qt Bluetooth).
+
+3. **Qt de escritorio 6.9.3** como *host* (en macOS: `brew install qt`).
+
+### Generar el APK
+
+```bash
+./build-android.sh            # genera el APK debug
+./build-android.sh install    # y lo instala en el dispositivo via adb
+```
+
+El script usa estas rutas por defecto (ajustables por variables de entorno
+`QT_ANDROID`, `QT_HOST`, `ANDROID_SDK_ROOT`, `ANDROID_NDK_ROOT`, `JAVA_HOME`):
+
+| Componente | Ruta por defecto |
+|------------|------------------|
+| Kit Qt Android | `~/Qt/6.9.3/android_arm64_v8a` |
+| Qt host (macOS) | `/opt/homebrew/opt/qt` |
+| Android SDK | `~/Library/Android/sdk` |
+| NDK | `~/Library/Android/sdk/ndk/27.0.12077973` |
+| JDK | el JBR de Android Studio |
+
+El APK queda en
+`build-android/android-build/build/outputs/apk/debug/android-build-debug.apk`
+(paquete `com.idev.rchd24`, minSdk 28, target 35).
+
+### Instalar y probar
+
+```bash
+adb install -r build-android/android-build/build/outputs/apk/debug/android-build-debug.apk
+```
+
+- La primera vez que uses Bluetooth, Android pedirá el permiso de
+  **dispositivos cercanos** (la app lo solicita en runtime, Android 12+).
+- El `AndroidManifest.xml` (en `android/`) ya declara `BLUETOOTH_SCAN`,
+  `BLUETOOTH_CONNECT`, `INTERNET` y los permisos legacy para Android 11−.
+- Si preferís Android Studio como IDE: **File → Open** sobre
+  `build-android/android-build/` (proyecto Gradle generado por Qt) para
+  instalar/depurar desde ahí. Los fuentes C++ se siguen editando en `RC-HD24/`.
+
 ## Uso
 
 1. Encendé el ESP32 y confirmá en el Monitor Serie el modo activo (`WiFi / TCP` o `Bluetooth (SPP)`).
@@ -133,7 +192,7 @@ Bluetooth      → SPP/RFCOMM (QBluetoothSocket) + descubrimiento de dispositivo
 | **Linux** | ✅ | ✅ | Soporte completo de Qt Bluetooth. |
 | **Windows** | ✅ | ✅ | Ejecutable GUI (sin consola). |
 | **macOS** | ✅ | ⚠️ | TCP recomendado; Qt tiene soporte limitado de Bluetooth Classic en macOS. |
-| **Android** | ✅ | ✅ | Objetivo principal del transporte BT. CMake preparado (`qt_add_executable`, SDK 28–35); requiere carpeta `android/` con manifest y permisos `BLUETOOTH_CONNECT` / `BLUETOOTH_SCAN`. |
+| **Android** | ✅ | ✅ | Objetivo principal del transporte BT. Ver *Compilación para Android*: manifest con permisos en `android/`, APK via `build-android.sh`. |
 
 En Android la ventana se abre maximizada; en escritorio, tamaño normal con estilo **Fusion**.
 
@@ -155,7 +214,9 @@ RC-HD24/
 ├── Tcp.h / .cpp       # Transporte WiFi/TCP
 ├── Bluetooth.h / .cpp # Transporte Bluetooth SPP
 ├── CMakeLists.txt     # Build Qt 5/6, desktop y Android
-├── build.sh           # Compilar (Debug)
+├── android/           # AndroidManifest.xml (permisos BT/red)
+├── build.sh           # Compilar desktop (Debug)
+├── build-android.sh   # Generar APK Android
 ├── brun.sh            # Compilar y ejecutar
 ├── run.sh             # Ejecutar binario
 └── clean.sh           # Limpiar build

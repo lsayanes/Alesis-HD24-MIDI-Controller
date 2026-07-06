@@ -3,6 +3,7 @@
 
 # Build outputs
 build/
+build-android/
 
 # Qt Creator
 CMakeLists.txt.user

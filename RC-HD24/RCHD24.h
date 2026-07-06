@@ -12,6 +12,7 @@ class QPushButton;
 class QLineEdit;
 class QLabel;
 class QMenu;
+class QShowEvent;
 
 // ---------------------------------------------------------------------------
 // RCHD24 — ventana principal del control remoto de la Alesis ADAT HD24.
@@ -40,6 +41,9 @@ public:
 
     // Construye menu + widgets centrales. Devuelve true si quedo lista.
     bool create(const std::string &title);
+
+protected:
+    void showEvent(QShowEvent *event) override;
 
 private slots:
     // Transporte / LOCATE.

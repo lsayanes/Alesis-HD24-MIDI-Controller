@@ -476,6 +476,8 @@ void setup()
     pinMode(MODE_SELECT_PIN, INPUT_PULLUP);
     delay(10);   // dejar estabilizar el pull-up antes de leer
     transport = (digitalRead(MODE_SELECT_PIN) == LOW) ? MODE_BT : MODE_WIFI;
+    
+    transport = MODE_BT;
 
     if (transport == MODE_WIFI)
     {
