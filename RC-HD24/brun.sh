@@ -50,7 +50,11 @@ if [ $? -eq 0 ]; then
     make -j$CORES
 
     if [ $? -eq 0 ]; then
-        ./RC-HD24
+        if [ -d "RC-HD24.app" ]; then
+            ./RC-HD24.app/Contents/MacOS/RC-HD24
+        else
+            ./RC-HD24
+        fi
     else
         echo "Error en la compilación"
         exit 1

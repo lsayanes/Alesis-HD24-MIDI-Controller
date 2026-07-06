@@ -31,6 +31,9 @@
 
 class QBluetoothDeviceDiscoveryAgent;
 class QBluetoothDeviceInfo;
+class QBluetoothServiceDiscoveryAgent;
+class QBluetoothServiceInfo;
+class QTimer;
 
 class Bluetooth : public QObject
 {
@@ -91,14 +94,31 @@ private slots:
     void onSocketError(QBluetoothSocket::SocketError error);
     void onDeviceDiscovered(const QBluetoothDeviceInfo &info);
     void onDiscoveryFinished();
+    void onServiceDiscovered(const QBluetoothServiceInfo &info);
+    void onServiceDiscoveryFinished();
+    void onServiceDiscoveryError();
+    void onConnectTimeout();
 
 private:
-    QBluetoothSocket               *m_socket = nullptr;
-    QBluetoothDeviceDiscoveryAgent *m_agent  = nullptr;
-    QByteArray                      m_buffer;   // reensamblado de lineas
-    QString                         m_address;  // MAC del equipo actual
+    void cancelConnectAttempt();
+    void startConnectTimeout();
+    void connectRfcomm(const QBluetoothAddress &address, quint16 channel);
+    void connectViaSdp(const QBluetoothAddress &address);
+    static QString describeSocketError(QBluetoothSocket::SocketError error,
+                                       const QString &fallback);
 
-    // Cuando connectToName() esta activo, guarda el nombre buscado para
-    // conectarse en cuanto el descubrimiento lo encuentre.
-    QString m_autoConnectName;
+    QBluetoothSocket                    *m_socket = nullptr;
+    QBluetoothDeviceDiscoveryAgent      *m_agent  = nullptr;
+    QBluetoothServiceDiscoveryAgent     *m_serviceAgent = nullptr;
+    QTimer                              *m_connectTimer = nullptr;
+    QByteArray                           m_buffer;
+    QString                              m_address;
+    QBluetoothAddress                    m_pendingAddress;
+    QString                              m_autoConnectName;
+    bool                                 m_serviceFound = false;
+    bool                                 m_triedDirectChannel = false;
+
+    // Canal RFCOMM tipico del ESP32 BluetoothSerial cuando el SDP no responde.
+    static constexpr quint16 DEFAULT_RFCOMM_CHANNEL = 1;
+    static constexpr int     CONNECT_TIMEOUT_MS = 15000;
 };

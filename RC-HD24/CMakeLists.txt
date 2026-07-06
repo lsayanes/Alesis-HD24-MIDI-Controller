@@ -68,8 +68,26 @@ set(RESOURCES
 # ============================================================================
 if(ANDROID)
   qt_add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS} ${RESOURCES})
+elseif(APPLE)
+  # En macOS DEBE ser un bundle .app con Info.plist: sin el bundle y sin
+  # NSBluetoothAlwaysUsageDescription, macOS (TCC) deniega el Bluetooth en
+  # silencio y las conexiones SPP expiran por timeout.
+  add_executable(${PROJECT_NAME} MACOSX_BUNDLE ${SOURCES} ${HEADERS} ${RESOURCES})
 else()
   add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS} ${RESOURCES})
+endif()
+
+# ============================================================================
+# Empaquetado macOS: bundle .app + Info.plist con permiso de Bluetooth
+# ============================================================================
+if(APPLE AND NOT ANDROID)
+  set(MACOSX_BUNDLE_BUNDLE_NAME           "${PROJECT_NAME}")
+  set(MACOSX_BUNDLE_GUI_IDENTIFIER        "com.lsayanes.rchd24")
+  set(MACOSX_BUNDLE_BUNDLE_VERSION        "1.2")
+  set(MACOSX_BUNDLE_SHORT_VERSION_STRING  "1.2")
+  set_target_properties(${PROJECT_NAME} PROPERTIES
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/Info.plist.in"
+  )
 endif()
 
 # Windows: build como GUI app (sin consola al lado).
@@ -122,6 +140,7 @@ if(NOT ANDROID)
 
   install(TARGETS ${PROJECT_NAME}
       RUNTIME DESTINATION bin
+      BUNDLE  DESTINATION .
   )
 
   if(EXISTS "${CMAKE_SOURCE_DIR}/img")

@@ -2,7 +2,10 @@
 
 #include <QBluetoothDeviceDiscoveryAgent>
 #include <QBluetoothDeviceInfo>
+#include <QBluetoothServiceDiscoveryAgent>
+#include <QBluetoothServiceInfo>
 #include <QBluetoothUuid>
+#include <QTimer>
 
 // ---------------------------------------------------------------------------
 // Construccion / destruccion
@@ -11,37 +14,50 @@ Bluetooth::Bluetooth(QObject *parent)
     : QObject(parent)
     , m_socket(new QBluetoothSocket(QBluetoothServiceInfo::RfcommProtocol, this))
     , m_agent(new QBluetoothDeviceDiscoveryAgent(this))
+    , m_serviceAgent(new QBluetoothServiceDiscoveryAgent(this))
+    , m_connectTimer(new QTimer(this))
 {
-    // Senales del socket SPP -> manejadores privados.
+    m_connectTimer->setSingleShot(true);
+
     connect(m_socket, &QBluetoothSocket::connected,    this, &Bluetooth::onConnected);
     connect(m_socket, &QBluetoothSocket::disconnected, this, &Bluetooth::onDisconnected);
     connect(m_socket, &QBluetoothSocket::readyRead,    this, &Bluetooth::onReadyRead);
     connect(m_socket, &QBluetoothSocket::errorOccurred, this, &Bluetooth::onSocketError);
 
-    // Senales del agente de descubrimiento.
     connect(m_agent, &QBluetoothDeviceDiscoveryAgent::deviceDiscovered,
             this, &Bluetooth::onDeviceDiscovered);
     connect(m_agent, &QBluetoothDeviceDiscoveryAgent::finished,
             this, &Bluetooth::onDiscoveryFinished);
     connect(m_agent, &QBluetoothDeviceDiscoveryAgent::canceled,
             this, &Bluetooth::onDiscoveryFinished);
+
+    connect(m_serviceAgent, &QBluetoothServiceDiscoveryAgent::serviceDiscovered,
+            this, &Bluetooth::onServiceDiscovered);
+    connect(m_serviceAgent, &QBluetoothServiceDiscoveryAgent::finished,
+            this, &Bluetooth::onServiceDiscoveryFinished);
+    connect(m_serviceAgent, &QBluetoothServiceDiscoveryAgent::canceled,
+            this, &Bluetooth::onServiceDiscoveryFinished);
+    connect(m_serviceAgent, &QBluetoothServiceDiscoveryAgent::errorOccurred,
+            this, &Bluetooth::onServiceDiscoveryError);
+
+    connect(m_connectTimer, &QTimer::timeout, this, &Bluetooth::onConnectTimeout);
 }
 
 Bluetooth::~Bluetooth()
 {
+    cancelConnectAttempt();
     stopDiscovery();
     disconnectFromDevice();
 }
 
 // ---------------------------------------------------------------------------
-// Descubrimiento
+// Descubrimiento de dispositivos
 // ---------------------------------------------------------------------------
 void Bluetooth::startDiscovery()
 {
     if (m_agent->isActive())
         m_agent->stop();
 
-    // SPP es Bluetooth Classic, asi que buscamos dispositivos clasicos.
     m_agent->start(QBluetoothDeviceDiscoveryAgent::ClassicMethod);
 }
 
@@ -60,12 +76,9 @@ void Bluetooth::onDeviceDiscovered(const QBluetoothDeviceInfo &info)
 {
     emit deviceDiscovered(info.name(), info.address().toString());
 
-    // Modo "conectar por nombre": si este equipo coincide, nos conectamos y
-    // dejamos de buscar.
     if (!m_autoConnectName.isEmpty() &&
         info.name().compare(m_autoConnectName, Qt::CaseInsensitive) == 0)
     {
-        const QString name = m_autoConnectName;
         m_autoConnectName.clear();
         stopDiscovery();
         connectToDevice(info.address());
@@ -74,24 +87,74 @@ void Bluetooth::onDeviceDiscovered(const QBluetoothDeviceInfo &info)
 
 void Bluetooth::onDiscoveryFinished()
 {
-    m_autoConnectName.clear();   // si no lo encontramos, cancelamos el auto-connect
+    m_autoConnectName.clear();
     emit discoveryFinished();
 }
 
 // ---------------------------------------------------------------------------
 // Conexion
 // ---------------------------------------------------------------------------
+void Bluetooth::cancelConnectAttempt()
+{
+    if (m_connectTimer)
+        m_connectTimer->stop();
+
+    if (m_serviceAgent && m_serviceAgent->isActive())
+        m_serviceAgent->stop();
+}
+
+void Bluetooth::startConnectTimeout()
+{
+    m_connectTimer->start(CONNECT_TIMEOUT_MS);
+}
+
+void Bluetooth::connectViaSdp(const QBluetoothAddress &address)
+{
+    m_pendingAddress = address;
+    m_serviceFound = false;
+    m_triedDirectChannel = false;
+
+    if (m_serviceAgent->isActive())
+        m_serviceAgent->stop();
+
+    m_serviceAgent->setRemoteAddress(address);
+    const QBluetoothUuid spp(QBluetoothUuid::ServiceClassUuid::SerialPort);
+    m_serviceAgent->setUuidFilter(spp);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    // MinimalDiscovery hace una consulta SDP directa sobre la direccion ya
+    // emparejada. FullDiscovery, en macOS, lanza un inquiry completo
+    // (IOBluetoothDeviceInquiry) innecesario y lento: el ESP32 suele dejar de
+    // ser "inquiry-discoverable" tras conectar/desconectar y el escaneo expira.
+    m_serviceAgent->start(QBluetoothServiceDiscoveryAgent::MinimalDiscovery);
+#else
+    m_serviceAgent->start(spp);
+#endif
+}
+
+void Bluetooth::connectRfcomm(const QBluetoothAddress &address, quint16 channel)
+{
+    if (m_socket->state() != QBluetoothSocket::SocketState::UnconnectedState)
+        m_socket->abort();
+
+    m_socket->connectToService(address, channel);
+}
+
 void Bluetooth::connectToDevice(const QBluetoothAddress &address)
 {
     m_address = address.toString();
     m_buffer.clear();
 
+    stopDiscovery();
+    cancelConnectAttempt();
+
     if (m_socket->state() != QBluetoothSocket::SocketState::UnconnectedState)
         m_socket->abort();
 
-    // Perfil SPP (Serial Port Profile) sobre RFCOMM: es el que expone el ESP32.
-    const QBluetoothUuid spp(QBluetoothUuid::ServiceClassUuid::SerialPort);
-    m_socket->connectToService(address, spp);
+    // connectToService(address, uuid) suele quedarse en ServiceLookupState
+    // (consulta SDP) y en macOS a veces hace timeout sin mensaje util.
+    // Primero descubrimos el servicio SPP; si falla, probamos canal RFCOMM 1.
+    startConnectTimeout();
+    connectViaSdp(address);
 }
 
 void Bluetooth::connectToDevice(const QString &address)
@@ -107,6 +170,8 @@ void Bluetooth::connectToName(const QString &name)
 
 void Bluetooth::disconnectFromDevice()
 {
+    cancelConnectAttempt();
+
     if (!m_socket)
         return;
 
@@ -120,6 +185,79 @@ bool Bluetooth::isConnected() const
 {
     return m_socket &&
            m_socket->state() == QBluetoothSocket::SocketState::ConnectedState;
+}
+
+void Bluetooth::onServiceDiscovered(const QBluetoothServiceInfo &info)
+{
+    if (info.device().address() != m_pendingAddress)
+        return;
+
+    const auto spp = QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::SerialPort);
+    const bool isSpp = info.serviceUuid() == spp
+                       || info.serviceClassUuids().contains(spp)
+                       || info.protocolServiceMultiplexer() > 0;
+
+    if (!isSpp)
+        return;
+
+    m_serviceFound = true;
+    m_serviceAgent->stop();
+
+    if (m_socket->state() != QBluetoothSocket::SocketState::UnconnectedState)
+        m_socket->abort();
+
+    m_socket->connectToService(info);
+}
+
+void Bluetooth::onServiceDiscoveryFinished()
+{
+    if (m_serviceFound || isConnected())
+        return;
+
+    if (!m_triedDirectChannel)
+    {
+        m_triedDirectChannel = true;
+        connectRfcomm(m_pendingAddress, DEFAULT_RFCOMM_CHANNEL);
+        return;
+    }
+
+    cancelConnectAttempt();
+    emit errorOccurred(tr(
+        "No se encontro el servicio SPP del ESP32. "
+        "En macOS, empareja \"HD24\" en Ajustes del Sistema > Bluetooth antes de conectar."));
+}
+
+void Bluetooth::onServiceDiscoveryError()
+{
+    if (m_serviceFound || isConnected())
+        return;
+
+    if (!m_triedDirectChannel)
+    {
+        m_triedDirectChannel = true;
+        connectRfcomm(m_pendingAddress, DEFAULT_RFCOMM_CHANNEL);
+        return;
+    }
+
+    cancelConnectAttempt();
+    const QString detail = m_serviceAgent->errorString();
+    emit errorOccurred(tr("Error al buscar servicio Bluetooth SPP: %1")
+                           .arg(detail.isEmpty() ? tr("desconocido") : detail));
+}
+
+void Bluetooth::onConnectTimeout()
+{
+    if (isConnected())
+        return;
+
+    cancelConnectAttempt();
+    m_socket->abort();
+
+    emit errorOccurred(tr(
+        "Timeout al conectar por Bluetooth (%1 s). "
+        "Verifica que el ESP32 este en modo BT, que \"HD24\" este emparejado "
+        "en Ajustes del Sistema > Bluetooth (macOS) y que no haya otra app conectada.")
+                           .arg(CONNECT_TIMEOUT_MS / 1000));
 }
 
 // ---------------------------------------------------------------------------
@@ -143,23 +281,23 @@ bool Bluetooth::sendCommand(const QString &command)
 }
 
 // ---------------------------------------------------------------------------
-// Manejadores de las senales del socket
+// Manejadores del socket
 // ---------------------------------------------------------------------------
 void Bluetooth::onConnected()
 {
+    cancelConnectAttempt();
     m_buffer.clear();
     emit connected();
 }
 
 void Bluetooth::onDisconnected()
 {
+    cancelConnectAttempt();
     emit disconnected();
 }
 
 void Bluetooth::onReadyRead()
 {
-    // Igual que en TCP: SPP es un flujo de bytes, reensamblamos por lineas '\n'
-    // y quitamos el '\r' final si viene.
     m_buffer.append(m_socket->readAll());
 
     int nl;
@@ -175,7 +313,49 @@ void Bluetooth::onReadyRead()
     }
 }
 
-void Bluetooth::onSocketError(QBluetoothSocket::SocketError /*error*/)
+QString Bluetooth::describeSocketError(QBluetoothSocket::SocketError error,
+                                         const QString &fallback)
 {
-    emit errorOccurred(m_socket->errorString());
+    switch (error)
+    {
+    case QBluetoothSocket::SocketError::NoSocketError:
+        return QString();
+    case QBluetoothSocket::SocketError::UnknownSocketError:
+        return QObject::tr("Error de socket Bluetooth desconocido");
+    case QBluetoothSocket::SocketError::ServiceNotFoundError:
+        return QObject::tr("Servicio SPP no encontrado (empareja \"HD24\" en Ajustes del Sistema)");
+    case QBluetoothSocket::SocketError::NetworkError:
+        return QObject::tr("Error de red Bluetooth");
+    case QBluetoothSocket::SocketError::UnsupportedProtocolError:
+        return QObject::tr("Protocolo RFCOMM no soportado en esta plataforma");
+    case QBluetoothSocket::SocketError::OperationError:
+        return QObject::tr("Operacion Bluetooth rechazada");
+    default:
+        break;
+    }
+
+    if (!fallback.isEmpty())
+        return fallback;
+
+    return QObject::tr("Error Bluetooth (codigo %1)").arg(static_cast<int>(error));
+}
+
+void Bluetooth::onSocketError(QBluetoothSocket::SocketError error)
+{
+    if (error == QBluetoothSocket::SocketError::NoSocketError)
+        return;
+
+    cancelConnectAttempt();
+
+    QString msg = describeSocketError(error, m_socket->errorString());
+    const auto state = m_socket->state();
+    msg += tr(" [estado=%1, MAC=%2]")
+               .arg(static_cast<int>(state))
+               .arg(m_address);
+
+#ifdef Q_OS_MACOS
+    msg += tr(". En macOS, empareja el dispositivo antes de conectar desde la app.");
+#endif
+
+    emit errorOccurred(msg);
 }

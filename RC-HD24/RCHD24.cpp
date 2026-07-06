@@ -420,5 +420,20 @@ void RCHD24::onLineReceived(const QString &line)
 
 void RCHD24::onTransportError(const QString &message)
 {
-    statusBar()->showMessage(tr("Error: %1").arg(message), 5000);
+    const QString text = message.trimmed().isEmpty()
+        ? tr("Error de conexion (sin detalle del sistema)")
+        : message;
+    statusBar()->showMessage(tr("Error: %1").arg(text), 8000);
+
+#ifdef Q_OS_MACOS
+    if (m_active == Active::Bluetooth)
+    {
+        QMessageBox::warning(this, tr("Bluetooth"),
+            tr("%1\n\n"
+               "En macOS el soporte de Qt para Bluetooth Classic es limitado.\n"
+               "1. Empareja \"HD24\" en Ajustes del Sistema > Bluetooth.\n"
+               "2. Si sigue fallando, usa WiFi/TCP o prueba en Android/Linux.")
+                .arg(text));
+    }
+#endif
 }
